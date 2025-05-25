@@ -187,19 +187,19 @@ def main():
 
     # Initialize zero-shot agent
     llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0)
-    prefix = """You are a Qur’an research assistant. 
-    When a user refers to a verse key (e.g., 'Surah 2:255'), use the lookup_verse tool. 
-    When a user requests metadata ('revelation_place of 2:255'), use the metadata_query tool. 
-    Otherwise, for general questions, use the rag_qa tool, breaking the question into subquestions if needed, 
-    and think through each retrieved verse step by step before answering. 
-    Always use only the tools’ outputs—do not hallucinate."""
     agent = initialize_agent(
         tools,
         llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
         verbose=True,
-        agent_kwargs={"prefix": prefix}
+        agent_kwargs={
+        "prefix": 
+            "You are a Qur’an research assistant. For queries like 'Surah X:Y', "
+            "call lookup_verse. For requests like 'field of X:Y', call metadata_query. "
+            "Otherwise, call rag_qa. Do NOT answer directly or hallucinate."
+        }
     )
+
     
     # Interactive REPL
     print("\n🗣️  Conversational Qur’an QA with chain-of-thought (type 'exit' to quit)\n")
@@ -211,7 +211,11 @@ def main():
 
         # Run the agent with the user input
         print("\n--- Assistant Reasoning & Answer ---")
-        print(agent.run(user_input))
+        try:
+            answer = agent.run(user_input)
+            print(answer)
+        except Exception as e:
+            print("🚨 Agent failed:", e)
 
 if __name__ == "__main__":
     main()
