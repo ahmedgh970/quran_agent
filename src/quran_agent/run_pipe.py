@@ -12,11 +12,6 @@ from langchain_core.prompts import (
     ChatPromptTemplate,
     MessagesPlaceholder,
 )
-from langchain_experimental.plan_and_execute import (
-    PlanAndExecute,
-    load_agent_executor,
-    load_tool_executor,
-)
 from quran_agent.config import OPENAI_API_KEY
 
 
@@ -189,29 +184,20 @@ def main():
         make_metadata_tool(verse_meta),
         make_rag_tool(vectordb),
     ]
+
+    # Initialize zero-shot agent
     llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0)
-    tool_executor = load_tool_executor(
-        llm=llm,
-        tools=tools
-    )
-    prefix = """You are a Qur’an research assistant.
-    When the user refers to a verse key (e.g., 'Surah 2:255'), use the lookup_verse tool.
-    When the user requests metadata ('revelation_place of 2:255'), use the metadata_query tool.
-    Otherwise, for open questions, decompose the question into sub-questions,
-    invoke the rag_qa tool for each, think step by step over retrieved verses,
-    and only use tool outputs—do not hallucinate."""
-    agent_executor = load_agent_executor(
-        tools=tools,
-        llm=llm,
+    agent = initialize_agent(
+        tools,
+        llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
         verbose=True,
-        prefix=prefix,
-    )
-
-    # 4c) Wire them together in PlanAndExecute
-    planner = PlanAndExecute(
-        agent_executor=agent_executor,
-        tool_executor=tool_executor,
+        agent_kwargs={
+        "prefix": 
+            "You are a Qur’an research assistant. For queries like 'Surah X:Y', "
+            "call lookup_verse. For requests like 'field of X:Y', call metadata_query. "
+            "Otherwise, call rag_qa. Do NOT answer directly or hallucinate."
+        }
     )
 
     
@@ -226,10 +212,11 @@ def main():
         # Run the agent with the user input
         print("\n--- Assistant Reasoning & Answer ---")
         try:
-            answer = planner.run(user_input)
+            answer = agent.run(user_input)
             print(answer)
         except Exception as e:
             print("🚨 Agent failed:", e)
+        
 
 if __name__ == "__main__":
     main()
