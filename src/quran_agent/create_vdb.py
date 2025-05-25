@@ -33,7 +33,7 @@ def main():
     )
 
     # Build & persist the chroma vector store
-    vectordb = Chroma.from_documents(
+    Chroma.from_documents(
         documents,
         embeddings,
         persist_directory="vectordbs/quran_chroma_db",
