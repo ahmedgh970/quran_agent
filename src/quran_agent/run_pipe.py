@@ -1,5 +1,5 @@
 import re
-from typing import Dict
+from typing import Dict, Tuple
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_chroma import Chroma
 from langchain.agents import Tool, initialize_agent, AgentType
@@ -16,18 +16,24 @@ from quran_agent.config import OPENAI_API_KEY
 
 
 def explore_vdb(vectordb: Chroma):
-    all_docs = vectordb._collection.get()
+    try:
+        all_docs = vectordb._collection.get() 
+    except Exception as e:
+        print(f"Error accessing collection: {e}")
+        return
+
     if all_docs:
         print("🔍 Exploring vector store:")
-        print(f"Number of documents: {len(all_docs['ids'])}")
-        print(f"Keys: {all_docs.keys()}")
-        print(f"First document ID: {all_docs['ids'][0]}")
-        print(f"First document embeddings: {all_docs['embeddings']}")
-        print(f"First document content: {all_docs['documents'][0]}")
-        print(f"First document metadata: {all_docs['metadatas'][0]}")
-        print(f"First document uris: {all_docs['uris']}")
-        print(f"First document included: {all_docs['included']}")
-        print(f"First document data: {all_docs['data']}")
+        print(f"Number of documents: {len(all_docs.get('ids', []))}")
+        print(f"Keys: {list(all_docs.keys())}")
+        if all_docs.get('ids'):
+            idx = 0
+            print(f"First document ID: {all_docs['ids'][idx]}")
+            # Use .get() for each field
+            for field in ["embeddings", "documents", "metadatas", "uris", "included", "data"]:
+                value = all_docs.get(field)
+                if value:
+                    print(f"First document {field}: {value[idx] if isinstance(value, list) else value}")
     else:
         print("No documents found in vectordb.")
 
@@ -49,7 +55,7 @@ def load_vectorstore(
     )
     return vectordb
 
-def build_prompt() -> tuple[ChatPromptTemplate, ChatPromptTemplate]:
+def build_prompt() -> Tuple[ChatPromptTemplate, ChatPromptTemplate]:
     """
     Creates a ChatPromptTemplate that instructs the LLM
     to think step-by-step over retrieved Qur’an verses.
@@ -72,7 +78,7 @@ def build_prompt() -> tuple[ChatPromptTemplate, ChatPromptTemplate]:
         "First, think through the following retrieved verses step by step, "
         "explaining how each one contributes to your understanding of the question. "
         "Then provide a concise answer in no more than three sentences. "
-        "If you do not know, simply say you don't know."
+        "If you do not know, simply say you don't know.\n"
         "{context}"
     ) 
     qa_prompt = ChatPromptTemplate.from_messages([
@@ -88,14 +94,23 @@ def build_lookups(vectordb: Chroma):
       - verse_texts: verse_key -> page_content
       - verse_meta : verse_key -> metadata dict
     """
-    raw = vectordb._collection.get()
-    texts, metas = raw["documents"], raw["metadatas"]
+    try:
+        raw = vectordb._collection.get()
+    except Exception as e:
+        print(f"Error loading collection: {e}")
+        return {}, {}
+
+    texts = raw.get("documents", [])
+    metas = raw.get("metadatas", [])
     verse_texts: Dict[str, str] = {}
     verse_meta: Dict[str, dict] = {}
     for txt, md in zip(texts, metas):
-        key = md.get("verse_key", f"{md['surah_id']}:{md['ayah']}")
-        verse_texts[key] = txt
-        verse_meta[key]   = md
+        surah_id = md.get("surah_id")
+        ayah = md.get("ayah")
+        key = md.get("verse_key") or (f"{surah_id}:{ayah}" if surah_id and ayah else None)
+        if key:
+            verse_texts[key] = txt
+            verse_meta[key] = md
     return verse_texts, verse_meta
 
 def make_verse_lookup_tool(verse_texts: Dict[str, str]) -> Tool:
@@ -117,7 +132,7 @@ def make_metadata_tool(verse_meta: Dict[str, dict]) -> Tool:
         Expects '<field> of <Surah:Ayah>' e.g. 'revelation_place of 2:255'.
         Returns the exact metadata value.
         """
-        m = re.match(r"^(\w+)\s*(?:of|for)\s*(\d+:\d+)$", query.strip(), flags=re.IGNORECASE)
+        m = re.match(r"^([\w_]+)\s*(?:of|for)\s*(\d+:\d+)$", query.strip(), flags=re.IGNORECASE)
         if not m:
             return ("Please use format '<field> of <Surah:Ayah>'. "
                     "Valid fields: revelation_place, revelation_order, juz_number, page_number, surah_name.")
@@ -145,19 +160,22 @@ def make_rag_tool(vectordb: Chroma) -> Tool:
     contextualize_q_prompt, qa_prompt = build_prompt()
     history_aware = create_history_aware_retriever(llm, retriever, contextualize_q_prompt)
     qa_chain = create_stuff_documents_chain(llm, qa_prompt)
+    
     rag_chain = create_retrieval_chain(history_aware, qa_chain)
 
     def rag_query(q: str) -> str:
-        resp = rag_chain.invoke({"input": q, "chat_history": []})
-        answer = resp["answer"]
-        context = resp["context"]
-        # Display context (cited verses)
+        try:
+            resp = rag_chain.invoke({"input": q, "chat_history": []})
+        except Exception as e:
+            return f"Error running RAG chain: {e}"
+        answer = resp.get("answer", "No answer returned.")
+        context = resp.get("context", [])
         sources = ""
-        if not answer.lower().startswith("i don't know"):
+        if not answer.lower().startswith("i don't know") and context:
             for doc in context:
-                c = doc.page_content
-                md = doc.metadata
-                sources += f"• {md['surah_name']} ({md['surah_id']}:{md['ayah']}): {c}\n"
+                c = getattr(doc, "page_content", "")
+                md = getattr(doc, "metadata", {})
+                sources += f"• {md.get('surah_name', '')} ({md.get('surah_id', '')}:{md.get('ayah', '')}): {c}\n"
         return f"{answer}\n\nSources:\n{sources}"
 
     return Tool(
@@ -169,8 +187,12 @@ def make_rag_tool(vectordb: Chroma) -> Tool:
 def main():
     # Load persisted Chroma vector store
     print("🔄 Loading persisted vector store…")
-    vectordb = load_vectorstore('vectordbs/quran_chroma_db')
-    print("✅ Vector store loaded.")
+    try:
+        vectordb = load_vectorstore('vectordbs/quran_chroma_db')
+        print("✅ Vector store loaded.")
+    except Exception as e:
+        print(f"🚨 Failed to load vectorstore: {e}")
+        return
 
     # Explore the vector store
     explore_vdb(vectordb)
@@ -186,25 +208,32 @@ def main():
     ]
 
     # Initialize zero-shot agent
-    llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0)
-    agent = initialize_agent(
-        tools,
-        llm,
-        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-        verbose=True,
-        agent_kwargs={
-        "prefix": 
-            "You are a Qur’an research assistant. For queries like 'Surah X:Y', "
-            "call lookup_verse. For requests like 'field of X:Y', call metadata_query. "
-            "Otherwise, call rag_qa. Do NOT answer directly or hallucinate."
-        }
-    )
+    try:
+        llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, temperature=0)
+        agent = initialize_agent(
+            tools,
+            llm,
+            agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+            verbose=True,
+            agent_kwargs={
+                "prefix":
+                    "You are a Qur’an research assistant. For queries like 'Surah X:Y', "
+                    "call lookup_verse. For requests like 'field of X:Y', call metadata_query. "
+                    "Otherwise, call rag_qa. Do NOT answer directly or hallucinate."
+            }
+        )
+    except Exception as e:
+        print(f"🚨 Failed to initialize agent: {e}")
+        return
 
-    
     # Interactive REPL
     print("\n🗣️  Conversational Qur’an QA with chain-of-thought (type 'exit' to quit)\n")
     while True:
-        user_input = input("> ").strip()
+        try:
+            user_input = input("> ").strip()
+        except EOFError:
+            print("\n👋 Goodbye!")
+            break
         if user_input.lower() in ("exit", "quit"):
             print("👋 Goodbye!")
             break
@@ -217,6 +246,5 @@ def main():
         except Exception as e:
             print("🚨 Agent failed:", e)
         
-
 if __name__ == "__main__":
     main()
