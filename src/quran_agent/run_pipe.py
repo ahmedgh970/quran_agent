@@ -73,6 +73,7 @@ def build_prompt() -> Tuple[ChatPromptTemplate, ChatPromptTemplate]:
         ("human", "{input}"),
     ])
 
+    # the {context} placeholder will be filled with retrieved verses
     qa_system_prompt = (
         "You are an expert, knowledgeable Qur’an scholar. "
         "First, think through the following retrieved verses step by step, "
@@ -132,9 +133,11 @@ def make_metadata_tool(verse_meta: Dict[str, dict]) -> Tool:
         Expects '<field> of <Surah:Ayah>' e.g. 'revelation_place of 2:255'.
         Returns the exact metadata value.
         """
-        m = re.match(r"^([\w_]+)\s*(?:of|for)\s*(\d+:\d+)$", query.strip(), flags=re.IGNORECASE)
+        print('\n==> The query is: ', query)
+        m = re.match(r"^([\w_]+)\s*(?:of|for)\s*(\d+:\d+)$", query.strip().strip("'").strip('"'), flags=re.IGNORECASE)
+        print('==> The regex m is: ', m)
         if not m:
-            return ("Please use format '<field> of <Surah:Ayah>'. "
+            return (f"M is {m} ! Please use format '<field> of <Surah:Ayah>'. "
                     "Valid fields: revelation_place, revelation_order, juz_number, page_number, surah_name.")
         field, key = m.group(1), m.group(2)
         md = verse_meta.get(key)
@@ -195,7 +198,7 @@ def main():
         return
 
     # Explore the vector store
-    explore_vdb(vectordb)
+    #explore_vdb(vectordb)
 
     # Build lookups
     verse_texts, verse_meta = build_lookups(vectordb)
@@ -239,10 +242,9 @@ def main():
             break
 
         # Run the agent with the user input
-        print("\n--- Assistant Reasoning & Answer ---")
+        print("--- Assistant Reasoning & Answer ---")
         try:
-            answer = agent.run(user_input)
-            print(answer)
+            agent.invoke(user_input)
         except Exception as e:
             print("🚨 Agent failed:", e)
         
